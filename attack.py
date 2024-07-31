@@ -115,3 +115,55 @@ def pgd_attack(model, images, eps=8/255, alpha=2/255, steps=10, random_start=Tru
         adv_images = torch.clamp(images + delta, min=0, max=1).detach()
 
     return adv_images
+
+def mifgsm_attack(model, images, eps=8 / 255, attack_iters=10, decay=1.0, random_start=True):
+    """
+    MIFGSM attack as described in 'Boosting Adversarial Attacks with Momentum'
+    https://arxiv.org/abs/1710.06081
+
+    Arguments:
+        model (nn.Module): model to attack.
+        images (torch.Tensor): original images to attack.
+        eps (float): maximum perturbation.
+        alpha (float): step size.
+        steps (int): number of iterations.
+        decay (float): momentum factor.
+        random_start (bool): using random initialization of delta.
+
+    Returns:
+        adv_images (torch.Tensor): adversarial images.
+    """
+    alpha = eps / attack_iters
+    device = next(model.parameters()).device
+    images = images.clone().detach().to(device)
+
+    if random_start:
+        adv_images = images + torch.empty_like(images).uniform_(-eps, eps)
+        adv_images = torch.clamp(adv_images, min=0, max=1).detach()
+    else:
+        adv_images = images.clone().detach()
+
+    images.requires_grad = True
+    with torch.no_grad():
+        labels = model(images).detach()
+
+    momentum = torch.zeros_like(images).detach()
+    loss_func = nn.MSELoss(reduction='mean')
+
+    for _ in range(attack_iters):
+        adv_images.requires_grad = True
+        outputs = model(adv_images)
+        loss = loss_func(outputs, labels)
+        grad = torch.autograd.grad(loss, adv_images, retain_graph=False, create_graph=False)[0]
+        print(grad.min(), grad.max())
+
+        grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+        grad = grad + momentum * decay
+
+        momentum = grad
+        adv_images = adv_images.detach() + alpha * grad.sign()
+        delta = torch.clamp(adv_images - images, min=-eps, max=eps)
+        adv_images = torch.clamp(images + delta, min=0, max=1).detach()
+
+    return adv_images
+
